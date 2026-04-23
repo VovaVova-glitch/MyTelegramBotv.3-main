@@ -558,10 +558,20 @@ async def reminders(message: Message):
     cur = db.cursor()
 
     cur.execute(
+        """
+        INSERT INTO users (user_id, reminders_enabled)
+        VALUES (?, 1)
+        ON CONFLICT(user_id) DO NOTHING
+        """,
+        (uid,)
+    )
+    cur.execute(
         "SELECT reminders_enabled FROM users WHERE user_id=?",
-        (uid,))
+        (uid,)
+    )
     row = cur.fetchone()
     status = bool(row[0]) if row else True
+    db.commit()
     db.close()
 
     if status:
@@ -583,6 +593,14 @@ async def reminders_on(callback: CallbackQuery):
     cur = db.cursor()
 
     cur.execute(
+        """
+        INSERT INTO users (user_id, reminders_enabled)
+        VALUES (?, 1)
+        ON CONFLICT(user_id) DO NOTHING
+        """,
+        (uid,)
+    )
+    cur.execute(
         "UPDATE users SET reminders_enabled=1 WHERE user_id=?",
         (uid,)
     )
@@ -602,6 +620,14 @@ async def reminders_off(callback: CallbackQuery):
     db = get_db()
     cur = db.cursor()
 
+    cur.execute(
+        """
+        INSERT INTO users (user_id, reminders_enabled)
+        VALUES (?, 1)
+        ON CONFLICT(user_id) DO NOTHING
+        """,
+        (uid,)
+    )
     cur.execute(
         "UPDATE users SET reminders_enabled=0 WHERE user_id=?",
         (uid,)
