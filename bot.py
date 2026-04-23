@@ -29,7 +29,6 @@ if not API_NINJAS_KEY:
 bot = Bot(token=token, timeout=30)
 dp = Dispatcher()
 
-user_state = {}
 calories_cache = {}
 
 # ---------- UI ----------
@@ -251,11 +250,55 @@ def init_db():
                 )
                 """)
 
+    cur.execute("""
+                CREATE TABLE IF NOT EXISTS user_states
+                (
+                    user_id
+                    INTEGER
+                    PRIMARY
+                    KEY,
+                    state
+                    TEXT
+                )
+                """)
+
     db.commit()
     db.close()
 
 
 # ---------- UTILS ----------
+def set_user_state(user_id: int, state: str):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """
+        INSERT INTO user_states (user_id, state)
+        VALUES (?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET state=excluded.state
+        """,
+        (user_id, state)
+    )
+    db.commit()
+    db.close()
+
+
+def get_user_state(user_id: int):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT state FROM user_states WHERE user_id=?", (user_id,))
+    row = cur.fetchone()
+    db.close()
+    return row[0] if row else None
+
+
+def clear_user_state(user_id: int):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("DELETE FROM user_states WHERE user_id=?", (user_id,))
+    db.commit()
+    db.close()
+
+
 def parse_activity_and_duration(text: str):
     raw = text.lower()
     m = re.search(r'(\d+)\s*(хв|хвилин|мин|min)', raw)
@@ -418,7 +461,7 @@ async def profile(message: Message):
     db.close()
 
     if not profile_row or not profile_row[0]:
-        user_state[uid] = "profile"
+        set_user_state(uid, "profile")
         await message.answer(
             "Введи профіль:\n"
             "Зріст, стать, мета\n"
@@ -444,7 +487,7 @@ async def profile(message: Message):
 
 @dp.message(Command("edit_profile"))
 async def edit_profile(message: Message):
-    user_state[message.from_user.id] = "profile"
+    set_user_state(message.from_user.id, "profile")
     await message.answer(
         "Зріст, стать, мета\n"
         "Приклад: 170, ж, схуднути"
@@ -453,7 +496,7 @@ async def edit_profile(message: Message):
 
 @dp.message(Command("set_goal"))
 async def set_goal(message: Message):
-    user_state[message.from_user.id] = "weekly_goal"
+    set_user_state(message.from_user.id, "weekly_goal")
     await message.answer(
         "Введи мету на тиждень (кількість днів тренувань)\n"
         "Приклад: 4"
@@ -709,7 +752,7 @@ async def challenge_done(callback: CallbackQuery):
 
 @dp.message(Command("workout"))
 async def workout(message: Message):
-    user_state[message.from_user.id] = "workout"
+    set_user_state(message.from_user.id, "workout")
     await message.answer(
         "Введи тренування.\n"
         "Можна через кому:\n"
@@ -719,7 +762,7 @@ async def workout(message: Message):
 
 @dp.message(Command("weight"))
 async def weight(message: Message):
-    user_state[message.from_user.id] = "weight"
+    set_user_state(message.from_user.id, "weight")
     await message.answer("Введи вагу (кг)")
 
 
@@ -831,7 +874,7 @@ async def handle_input(message: Message):
         return
 
     uid = message.from_user.id
-    state = user_state.get(uid)
+    state = get_user_state(uid)
 
     if not state:
         await message.answer("Я на зв'язку 👋 Використай /start, щоб побачити команди.")
@@ -858,7 +901,7 @@ async def handle_input(message: Message):
             db.close()
 
             await message.answer("Мета тижня збережена.")
-            user_state.pop(uid)
+            clear_user_state(uid)
         except:
             await message.answer("Введи число.")
         return
@@ -882,7 +925,7 @@ async def handle_input(message: Message):
             db.close()
 
             await message.answer("Вагу збережено.")
-            user_state.pop(uid)
+            clear_user_state(uid)
         except:
             await message.answer("Введи число.")
         return
@@ -914,7 +957,7 @@ async def handle_input(message: Message):
             db.close()
 
             await message.answer("Профіль збережено.")
-            user_state.pop(uid)
+            clear_user_state(uid)
         except:
             await message.answer("Формат: 165, ч, мета")
 
@@ -934,7 +977,7 @@ async def handle_input(message: Message):
         db.close()
 
         await message.answer(f"Збережено: {len(exercises)}")
-        user_state.pop(uid)
+        clear_user_state(uid)
 
 
 # ---------- RUN ----------
