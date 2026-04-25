@@ -32,38 +32,47 @@ dp = Dispatcher()
 calories_cache = {}
 
 # ---------- UI ----------
-reminders_kb = InlineKeyboardMarkup(inline_keyboard=[
+def reminders_on_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text=pick_lang(lang, "❌ Вимкнути", "❌ Disable"),
+            callback_data="reminders_off"
+        )
+    ]])
+
+
+def reminders_off_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(
+            text=pick_lang(lang, "✅ Увімкнути", "✅ Enable"),
+            callback_data="reminders_on"
+        )
+    ]])
+
+
+def reset_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=pick_lang(lang, "✅ Так", "✅ Yes"), callback_data="reset_yes"),
+        InlineKeyboardButton(text=pick_lang(lang, "❌ Ні", "❌ No"), callback_data="reset_no")
+    ]])
+
+
+def suggest_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=pick_lang(lang, "✅ Виконав", "✅ Done"), callback_data="suggest_done"),
+        InlineKeyboardButton(text=pick_lang(lang, "🔁 Інша", "🔁 Another"), callback_data="suggest_retry")
+    ]])
+
+
+def challenge_keyboard(lang: str) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=pick_lang(lang, "✅ Зробив", "✅ Done"), callback_data="challenge_done"),
+        InlineKeyboardButton(text=pick_lang(lang, "🔁 Інший челендж", "🔁 Another challenge"), callback_data="challenge_next")
+    ]])
+language_kb = InlineKeyboardMarkup(inline_keyboard=[
     [
-        InlineKeyboardButton(text="✅ Увімкнути", callback_data="reminders_on"),
-        InlineKeyboardButton(text="❌ Вимкнути", callback_data="reminders_off")
-    ]
-])
-reminders_on_kb = InlineKeyboardMarkup(inline_keyboard=[
-    [
-        InlineKeyboardButton(text="❌ Вимкнути", callback_data="reminders_off")
-    ]
-])
-reminders_off_kb = InlineKeyboardMarkup(inline_keyboard=[
-    [
-        InlineKeyboardButton(text="✅ Увімкнути", callback_data="reminders_on")
-    ]
-])
-reset_kb = InlineKeyboardMarkup(inline_keyboard=[
-    [
-        InlineKeyboardButton(text="✅ Так", callback_data="reset_yes"),
-        InlineKeyboardButton(text="❌ Ні", callback_data="reset_no")
-    ]
-])
-suggest_kb = InlineKeyboardMarkup(inline_keyboard=[
-    [
-        InlineKeyboardButton(text="✅ Виконав", callback_data="suggest_done"),
-        InlineKeyboardButton(text="🔁 Інша", callback_data="suggest_retry")
-    ]
-])
-challenge_kb = InlineKeyboardMarkup(inline_keyboard=[
-    [
-        InlineKeyboardButton(text="✅ Зробив", callback_data="challenge_done"),
-        InlineKeyboardButton(text="🔁 Інший челендж", callback_data="challenge_next")
+        InlineKeyboardButton(text="English", callback_data="set_lang_en"),
+        InlineKeyboardButton(text="Українська", callback_data="set_lang_uk")
     ]
 ])
 
@@ -90,6 +99,10 @@ FITNESS_CHALLENGES = [
     "Біг або швидкий крок 20 хв без зупинок",
     "100 стрибків на місці + 20 присідань + 20 випадів"
 ]
+
+
+def pick_lang(lang: str, uk: str, en: str) -> str:
+    return en if lang == "en" else uk
 
 
 def style_block(title: str, body: str, icon: str = "✨") -> str:
@@ -166,10 +179,11 @@ async def check_missed_days():
     for uid in users:
         cur.execute("SELECT 1 FROM workouts WHERE user_id=? AND date=?", (uid, yesterday))
         if not cur.fetchone():
+            lang = get_user_language(uid)
             messages = [
-                "💪 Вчора пропустив тренування?\nСьогодні новий день! 🔥 /suggest",
-                "😴 Відпочив вчора? Повертайся до строю! /today",
-                "⚡ Швидкий тест: /suggest → ✅ Виконав!"
+                pick_lang(lang, "💪 Вчора пропустив тренування?\nСьогодні новий день! 🔥 /suggest", "💪 Missed a workout yesterday?\nToday is a new day! 🔥 /suggest"),
+                pick_lang(lang, "😴 Відпочив вчора? Повертайся до строю! /today", "😴 Rested yesterday? Back to action! /today"),
+                pick_lang(lang, "⚡ Швидкий тест: /suggest → ✅ Виконав!", "⚡ Quick test: /suggest → ✅ Done!")
             ]
             await bot.send_message(uid, random.choice(messages))
 
@@ -215,6 +229,8 @@ def init_db():
 
     if 'reminders_enabled' not in columns:
         cur.execute("ALTER TABLE users ADD COLUMN reminders_enabled INTEGER DEFAULT 1")
+    if 'language' not in columns:
+        cur.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'uk'")
 
     cur.execute("""
                 CREATE TABLE IF NOT EXISTS weights
@@ -295,6 +311,32 @@ def clear_user_state(user_id: int):
     db = get_db()
     cur = db.cursor()
     cur.execute("DELETE FROM user_states WHERE user_id=?", (user_id,))
+    db.commit()
+    db.close()
+
+
+def get_user_language(user_id: int) -> str:
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT language FROM users WHERE user_id=?", (user_id,))
+    row = cur.fetchone()
+    db.close()
+    if row and row[0] in ("uk", "en"):
+        return row[0]
+    return "uk"
+
+
+def set_user_language(user_id: int, lang: str):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """
+        INSERT INTO users (user_id, language)
+        VALUES (?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET language=excluded.language
+        """,
+        (user_id, lang)
+    )
     db.commit()
     db.close()
 
@@ -395,9 +437,10 @@ def calculate_streak(dates):
 # ---------- RESET ----------
 @dp.message(Command("reset"))
 async def reset_profile(message: Message):
+    lang = get_user_language(message.from_user.id)
     await message.answer(
-        "Видалити профіль і всі дані?",
-        reply_markup=reset_kb
+        pick_lang(lang, "Видалити профіль і всі дані?", "Delete profile and all data?"),
+        reply_markup=reset_keyboard(lang)
     )
 
 
@@ -414,19 +457,33 @@ async def reset_yes(callback: CallbackQuery):
     db.commit()
     db.close()
 
-    await callback.message.edit_text("Профіль повністю видалено.")
+    lang = get_user_language(uid)
+    await callback.message.edit_text(pick_lang(lang, "Профіль повністю видалено.", "Profile and all data were deleted."))
 
 
 @dp.callback_query(lambda c: c.data == "reset_no")
 async def reset_no(callback: CallbackQuery):
-    await callback.message.edit_text("Скасування.")
+    lang = get_user_language(callback.from_user.id)
+    await callback.message.edit_text(pick_lang(lang, "Скасування.", "Canceled."))
 
 
 # ---------- COMMANDS ----------
 @dp.message(Command("start"))
 async def start(message: Message):
-    text = style_block(
-        "SportBot",
+    uid = message.from_user.id
+    lang = get_user_language(uid)
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT language FROM users WHERE user_id=?", (uid,))
+    has_lang = cur.fetchone()
+    db.close()
+
+    if not has_lang or not has_lang[0]:
+        await message.answer("Оберіть мову", reply_markup=language_kb)
+        return
+
+    menu_body = pick_lang(
+        lang,
         "/profile — профіль\n"
         "/edit_profile — змінити профіль\n"
         "/workout — записати тренування\n"
@@ -442,14 +499,43 @@ async def start(message: Message):
         "/motivate — мотивація\n"
         "/tip — корисна порада\n"
         "/challenge — челендж дня",
+        "/profile — profile\n"
+        "/edit_profile — edit profile\n"
+        "/workout — log workout\n"
+        "/today — today\n"
+        "/stats — statistics\n"
+        "/weight — weight\n"
+        "/reset — delete all data\n"
+        "/weight_stats — weight statistics\n"
+        "/suggest — suggest workout\n"
+        "/set_goal — set weekly goal\n"
+        "/reminders — reminders\n"
+        "/goal — show weekly goal\n"
+        "/motivate — motivation\n"
+        "/tip — health tip\n"
+        "/challenge — challenge of the day"
+    )
+    text = style_block(
+        "SportBot",
+        menu_body,
         icon="🏁"
     )
     await message.answer(text, parse_mode="HTML")
 
 
+@dp.callback_query(lambda c: c.data in ("set_lang_en", "set_lang_uk"))
+async def set_language(callback: CallbackQuery):
+    lang = "en" if callback.data == "set_lang_en" else "uk"
+    set_user_language(callback.from_user.id, lang)
+    await callback.answer("Saved" if lang == "en" else "Збережено")
+    await callback.message.edit_text("Language selected: English" if lang == "en" else "Мову обрано: Українська")
+    await start(callback.message)
+
+
 @dp.message(Command("profile"))
 async def profile(message: Message):
     uid = message.from_user.id
+    lang = get_user_language(uid)
     db = get_db()
     cur = db.cursor()
 
@@ -463,22 +549,25 @@ async def profile(message: Message):
     if not profile_row or not profile_row[0]:
         set_user_state(uid, "profile")
         await message.answer(
-            "Введи профіль:\n"
-            "Зріст, стать, мета\n"
-            "Приклад: 165, ч, набрати масу"
+            pick_lang(
+                lang,
+                "Введи профіль:\nЗріст, стать, мета\nПриклад: 165, ч, набрати масу",
+                "Enter your profile:\nHeight, gender, goal\nExample: 165, m, gain muscle"
+            )
         )
         return
 
     h, g, goal, current_weight = profile_row  # ← 4 змінні!
-    weight_text = f"{current_weight:.1f} кг" if current_weight and current_weight > 0 else "не вказана"
+    weight_text = f"{current_weight:.1f} кг" if current_weight and current_weight > 0 else pick_lang(lang, "не вказана", "not set")
 
     await message.answer(
         style_block(
-            "Профіль",
-            f"📏 Зріст: {h} см\n"
-            f"🧍 Стать: {g}\n"
-            f"⚖️ Вага: {weight_text}\n"
-            f"🎯 Мета: {goal}",
+            pick_lang(lang, "Профіль", "Profile"),
+            pick_lang(
+                lang,
+                f"📏 Зріст: {h} см\n🧍 Стать: {g}\n⚖️ Вага: {weight_text}\n🎯 Мета: {goal}",
+                f"📏 Height: {h} cm\n🧍 Gender: {g}\n⚖️ Weight: {weight_text}\n🎯 Goal: {goal}"
+            ),
             icon="👤"
         ),
         parse_mode="HTML"
@@ -487,25 +576,26 @@ async def profile(message: Message):
 
 @dp.message(Command("edit_profile"))
 async def edit_profile(message: Message):
+    lang = get_user_language(message.from_user.id)
     set_user_state(message.from_user.id, "profile")
     await message.answer(
-        "Зріст, стать, мета\n"
-        "Приклад: 170, ж, схуднути"
+        pick_lang(lang, "Зріст, стать, мета\nПриклад: 170, ж, схуднути", "Height, gender, goal\nExample: 170, f, lose weight")
     )
 
 
 @dp.message(Command("set_goal"))
 async def set_goal(message: Message):
+    lang = get_user_language(message.from_user.id)
     set_user_state(message.from_user.id, "weekly_goal")
     await message.answer(
-        "Введи мету на тиждень (кількість днів тренувань)\n"
-        "Приклад: 4"
+        pick_lang(lang, "Введи мету на тиждень (кількість днів тренувань)\nПриклад: 4", "Enter weekly goal (number of workout days)\nExample: 4")
     )
 
 
 @dp.message(Command("goal"))
 async def goal(message: Message):
     uid = message.from_user.id
+    lang = get_user_language(uid)
     db = get_db()
     cur = db.cursor()
 
@@ -517,7 +607,7 @@ async def goal(message: Message):
 
     if not row or not row[0] or row[0] < 1:
         db.close()
-        await message.answer("Мета не задана. Використовуй /set_goal")
+        await message.answer(pick_lang(lang, "Мета не задана. Використовуй /set_goal", "Goal is not set. Use /set_goal"))
         return
 
     weekly_goal = int(row[0])
@@ -536,15 +626,16 @@ async def goal(message: Message):
     blocks_done = int(progress / 10)
     bar = "█" * blocks_done + "░" * (blocks_total - blocks_done)
 
-    status = "🔥 Чудово" if done >= weekly_goal else "⏳ Продовжуй"
+    status = pick_lang(lang, "🔥 Чудово", "🔥 Great") if done >= weekly_goal else pick_lang(lang, "⏳ Продовжуй", "⏳ Keep going")
 
     await message.answer(
         style_block(
-            "Мета на тиждень",
-            f"🎯 Ціль: {weekly_goal}\n"
-            f"✅ Виконано: {done}\n"
-            f"📈 Прогрес: {progress}% {bar}\n"
-            f"{status}",
+            pick_lang(lang, "Мета на тиждень", "Weekly goal"),
+            pick_lang(
+                lang,
+                f"🎯 Ціль: {weekly_goal}\n✅ Виконано: {done}\n📈 Прогрес: {progress}% {bar}\n{status}",
+                f"🎯 Goal: {weekly_goal}\n✅ Done: {done}\n📈 Progress: {progress}% {bar}\n{status}"
+            ),
             icon="🗓️"
         ),
         parse_mode="HTML"
@@ -554,6 +645,7 @@ async def goal(message: Message):
 @dp.message(Command("reminders"))
 async def reminders(message: Message):
     uid = message.from_user.id
+    lang = get_user_language(uid)
     db = get_db()
     cur = db.cursor()
 
@@ -576,19 +668,20 @@ async def reminders(message: Message):
 
     if status:
         await message.answer(
-            "🔔 Нагадування вже увімкнені.\n\nХочеш вимкнути?",
-            reply_markup=reminders_on_kb
+            pick_lang(lang, "🔔 Нагадування вже увімкнені.\n\nХочеш вимкнути?", "🔔 Reminders are already enabled.\n\nDo you want to disable them?"),
+            reply_markup=reminders_on_keyboard(lang)
         )
     else:
         await message.answer(
-            "🔕 Нагадування вже вимкнені.\n\nХочеш увімкнути?",
-            reply_markup=reminders_off_kb
+            pick_lang(lang, "🔕 Нагадування вже вимкнені.\n\nХочеш увімкнути?", "🔕 Reminders are already disabled.\n\nDo you want to enable them?"),
+            reply_markup=reminders_off_keyboard(lang)
         )
 
 
 @dp.callback_query(lambda c: c.data == "reminders_on")
 async def reminders_on(callback: CallbackQuery):
     uid = callback.from_user.id
+    lang = get_user_language(uid)
     db = get_db()
     cur = db.cursor()
 
@@ -608,15 +701,19 @@ async def reminders_on(callback: CallbackQuery):
     db.close()
 
     await callback.message.edit_text(
-        "🔔 Нагадування УВІМКНЕНІ!\n\n"
-        "Отримувати мотивацію щодня при пропуску тренування? 💪"
+        pick_lang(
+            lang,
+            "🔔 Нагадування УВІМКНЕНІ!\n\nОтримувати мотивацію щодня при пропуску тренування? 💪",
+            "🔔 Reminders are ENABLED!\n\nGet daily motivation if you skip a workout? 💪"
+        )
     )
-    await callback.answer("Увімкнено!")
+    await callback.answer(pick_lang(lang, "Увімкнено!", "Enabled!"))
 
 
 @dp.callback_query(lambda c: c.data == "reminders_off")
 async def reminders_off(callback: CallbackQuery):
     uid = callback.from_user.id
+    lang = get_user_language(uid)
     db = get_db()
     cur = db.cursor()
 
@@ -636,14 +733,18 @@ async def reminders_off(callback: CallbackQuery):
     db.close()
 
     await callback.message.edit_text(
-        "🔕 Нагадування ВИМКНЕНІ\n\n"
-        "Ти босс, тренуйся за настроєм! 😎"
+        pick_lang(
+            lang,
+            "🔕 Нагадування ВИМКНЕНІ\n\nТи босс, тренуйся за настроєм! 😎",
+            "🔕 Reminders are DISABLED\n\nYou're the boss, train by your mood! 😎"
+        )
     )
-    await callback.answer("Вимкнено!")
+    await callback.answer(pick_lang(lang, "Вимкнено!", "Disabled!"))
 
 
 @dp.message(Command("suggest"))
 async def suggest(message: Message):
+    lang = get_user_language(message.from_user.id)
     db = get_db()
     cur = db.cursor()
     cur.execute("SELECT goal FROM users WHERE user_id=?", (message.from_user.id,))
@@ -651,43 +752,50 @@ async def suggest(message: Message):
     db.close()
 
     if not row or not row[0]:
-        await message.answer("Спочатку задай мету в профілі (/profile).")
+        await message.answer(pick_lang(lang, "Спочатку задай мету в профілі (/profile).", "Set a goal in your profile first (/profile)."))
         return
 
     text = generate_workout(row[0])
-    await message.answer(text, reply_markup=suggest_kb)
+    await message.answer(text, reply_markup=suggest_keyboard(lang))
 
 
 @dp.message(Command("motivate"))
 async def motivate(message: Message):
+    lang = get_user_language(message.from_user.id)
     quote = random.choice(MOTIVATION_QUOTES)
+    title = pick_lang(lang, "Мотивація", "Motivation")
     await message.answer(
-        style_block("Мотивація", f"💬 {quote}", icon="🚀"),
+        style_block(title, f"💬 {quote}", icon="🚀"),
         parse_mode="HTML"
     )
 
 
 @dp.message(Command("tip"))
 async def tip(message: Message):
+    lang = get_user_language(message.from_user.id)
     tip_text = random.choice(HEALTH_TIPS)
+    title = pick_lang(lang, "Порада дня", "Tip of the day")
     await message.answer(
-        style_block("Порада дня", f"💡 {tip_text}", icon="🧠"),
+        style_block(title, f"💡 {tip_text}", icon="🧠"),
         parse_mode="HTML"
     )
 
 
 @dp.message(Command("challenge"))
 async def challenge(message: Message):
+    lang = get_user_language(message.from_user.id)
     challenge_text = random.choice(FITNESS_CHALLENGES)
+    title = pick_lang(lang, "Челендж дня", "Challenge of the day")
     await message.answer(
-        style_block("Челендж дня", f"🔥 {challenge_text}", icon="🏆"),
+        style_block(title, f"🔥 {challenge_text}", icon="🏆"),
         parse_mode="HTML",
-        reply_markup=challenge_kb
+        reply_markup=challenge_keyboard(lang)
     )
 
 
 @dp.callback_query(F.data == "suggest_retry")
 async def suggest_retry(callback: CallbackQuery):
+    lang = get_user_language(callback.from_user.id)
     db = get_db()
     cur = db.cursor()
     cur.execute("SELECT goal FROM users WHERE user_id=?", (callback.from_user.id,))
@@ -695,16 +803,17 @@ async def suggest_retry(callback: CallbackQuery):
     db.close()
 
     if not row or not row[0]:
-        await callback.answer("Немає мети", show_alert=True)
+        await callback.answer(pick_lang(lang, "Немає мети", "No goal set"), show_alert=True)
         return
 
     text = generate_workout(row[0])
-    await callback.message.answer(text, reply_markup=suggest_kb)
+    await callback.message.answer(text, reply_markup=suggest_keyboard(lang))
     await callback.answer()
 
 
 @dp.callback_query(F.data == "suggest_done")
 async def suggest_done(callback: CallbackQuery):
+    lang = get_user_language(callback.from_user.id)
     await callback.answer("OK")
     uid = callback.from_user.id
     today = datetime.now().strftime("%Y-%m-%d")
@@ -720,7 +829,7 @@ async def suggest_done(callback: CallbackQuery):
     )
     if cur.fetchone():
         db.close()
-        await callback.answer("Сьогодні вже зараховано")
+        await callback.answer(pick_lang(lang, "Сьогодні вже зараховано", "Already counted today"))
         return
 
     for line in workout_text.split("\n"):
@@ -734,24 +843,26 @@ async def suggest_done(callback: CallbackQuery):
     db.close()
 
     await callback.message.edit_text(
-        callback.message.text + "\n\n✅ Тренування збережено"
+        callback.message.text + pick_lang(lang, "\n\n✅ Тренування збережено", "\n\n✅ Workout saved")
     )
 
 
 @dp.callback_query(F.data == "challenge_next")
 async def challenge_next(callback: CallbackQuery):
+    lang = get_user_language(callback.from_user.id)
     challenge_text = random.choice(FITNESS_CHALLENGES)
     await callback.message.edit_text(
-        style_block("Челендж дня", f"🔥 {challenge_text}", icon="🏆"),
+        style_block(pick_lang(lang, "Челендж дня", "Challenge of the day"), f"🔥 {challenge_text}", icon="🏆"),
         parse_mode="HTML",
-        reply_markup=challenge_kb
+        reply_markup=challenge_keyboard(lang)
     )
-    await callback.answer("Новий челендж 💪")
+    await callback.answer(pick_lang(lang, "Новий челендж 💪", "New challenge 💪"))
 
 
 @dp.callback_query(F.data == "challenge_done")
 async def challenge_done(callback: CallbackQuery):
     uid = callback.from_user.id
+    lang = get_user_language(uid)
     today = datetime.now().strftime("%Y-%m-%d")
     challenge_text = callback.message.text
 
@@ -770,30 +881,35 @@ async def challenge_done(callback: CallbackQuery):
     db.close()
 
     await callback.message.edit_text(
-        callback.message.text + "\n\n✅ Челендж зараховано!",
+        callback.message.text + pick_lang(lang, "\n\n✅ Челендж зараховано!", "\n\n✅ Challenge counted!"),
         parse_mode="HTML"
     )
-    await callback.answer("Круто! Так тримати 🔥")
+    await callback.answer(pick_lang(lang, "Круто! Так тримати 🔥", "Great! Keep it up 🔥"))
 
 
 @dp.message(Command("workout"))
 async def workout(message: Message):
+    lang = get_user_language(message.from_user.id)
     set_user_state(message.from_user.id, "workout")
     await message.answer(
-        "Введи тренування.\n"
-        "Можна через кому:\n"
-        "Біг 30 хвилин, Відтискування 4x20"
+        pick_lang(
+            lang,
+            "Введи тренування.\nМожна через кому:\nБіг 30 хвилин, Відтискування 4x20",
+            "Enter workout.\nYou can separate by commas:\nRunning 30 min, Push ups 4x20"
+        )
     )
 
 
 @dp.message(Command("weight"))
 async def weight(message: Message):
+    lang = get_user_language(message.from_user.id)
     set_user_state(message.from_user.id, "weight")
-    await message.answer("Введи вагу (кг)")
+    await message.answer(pick_lang(lang, "Введи вагу (кг)", "Enter weight (kg)"))
 
 
 @dp.message(Command("weight_stats"))
 async def weight_stats(message: Message):
+    lang = get_user_language(message.from_user.id)
     db = get_db()
     cur = db.cursor()
     cur.execute(
@@ -804,10 +920,10 @@ async def weight_stats(message: Message):
     db.close()
 
     if not rows:
-        await message.answer("Вага ще не записувалася.")
+        await message.answer(pick_lang(lang, "Вага ще не записувалася.", "No weight entries yet."))
         return
 
-    text = "⚖️ Вага (останні записи):\n"
+    text = pick_lang(lang, "⚖️ Вага (останні записи):\n", "⚖️ Weight (latest entries):\n")
     for w, d in rows:
         text += f"{d}: {w} кг\n"
 
@@ -817,6 +933,7 @@ async def weight_stats(message: Message):
 # ---------- TODAY ----------
 @dp.message(Command("today"))
 async def today(message: Message):
+    lang = get_user_language(message.from_user.id)
     db = get_db()
     cur = db.cursor()
 
@@ -829,7 +946,7 @@ async def today(message: Message):
     db.close()
 
     if not rows:
-        await message.answer("Сьогодні тренувань немає.")
+        await message.answer(pick_lang(lang, "Сьогодні тренувань немає.", "No workouts today."))
         return
 
     total_cal = sum(calc_calories(r[0]) for r in rows)
@@ -837,8 +954,8 @@ async def today(message: Message):
 
     await message.answer(
         style_block(
-            "Сьогоднішні тренування",
-            f"{text}\n\n🔥 Витрачено: ~{total_cal} ккал",
+            pick_lang(lang, "Сьогоднішні тренування", "Today's workouts"),
+            pick_lang(lang, f"{text}\n\n🔥 Витрачено: ~{total_cal} ккал", f"{text}\n\n🔥 Burned: ~{total_cal} kcal"),
             icon="🏋️"
         ),
         parse_mode="HTML"
@@ -851,6 +968,7 @@ async def stats(message: Message):
     db = get_db()
     cur = db.cursor()
     uid = message.from_user.id
+    lang = get_user_language(uid)
 
     cur.execute(
         "SELECT date, text FROM workouts WHERE user_id=? ORDER BY date DESC",
@@ -860,7 +978,7 @@ async def stats(message: Message):
     db.close()
 
     if not rows:
-        await message.answer("Тренувань немає.")
+        await message.answer(pick_lang(lang, "Тренувань немає.", "No workouts yet."))
         return
 
     dates = [d for d, _ in rows]
@@ -872,19 +990,22 @@ async def stats(message: Message):
     week_cal = sum(calc_calories(t) for d, t in rows if d >= week_ago)
 
     text = (
-        f"📊 Статистика\n"
-        f"Днів тренування: {len(set(dates))}\n"
-        f"Серія: {streak}\n"
-        f"🔥 Калорій всього: ~{total_cal}\n"
-        f"🔥 За 7 днів: ~{week_cal}\n\n"
-        f"Останні:\n"
+        pick_lang(
+            lang,
+            f"📊 Статистика\nДнів тренування: {len(set(dates))}\nСерія: {streak}\n🔥 Калорій всього: ~{total_cal}\n🔥 За 7 днів: ~{week_cal}\n\nОстанні:\n",
+            f"📊 Statistics\nWorkout days: {len(set(dates))}\nStreak: {streak}\n🔥 Calories total: ~{total_cal}\n🔥 Last 7 days: ~{week_cal}\n\nRecent:\n"
+        )
     )
 
     for d, t in rows[:5]:
         text += f"{d}: {t}\n"
 
     await message.answer(
-        style_block("Статистика", text.replace("📊 Статистика\n", "").strip(), icon="📊"),
+        style_block(
+            pick_lang(lang, "Статистика", "Statistics"),
+            text.replace(pick_lang(lang, "📊 Статистика\n", "📊 Statistics\n"), "").strip(),
+            icon="📊"
+        ),
         parse_mode="HTML"
     )
 
@@ -892,18 +1013,20 @@ async def stats(message: Message):
 # ---------- INPUT ----------
 @dp.message()
 async def handle_input(message: Message):
+    uid = message.from_user.id
+    lang = get_user_language(uid)
+
     if not message.text:
-        await message.answer("Поки що працюю лише з текстом. Спробуй команду /start")
+        await message.answer(pick_lang(lang, "Поки що працюю лише з текстом. Спробуй команду /start", "I currently work with text only. Try /start"))
         return
 
     if message.text.startswith("/"):
         return
 
-    uid = message.from_user.id
     state = get_user_state(uid)
 
     if not state:
-        await message.answer("Я на зв'язку 👋 Використай /start, щоб побачити команди.")
+        await message.answer(pick_lang(lang, "Я на зв'язку 👋 Використай /start, щоб побачити команди.", "I'm here 👋 Use /start to see commands."))
         return
 
     if state == "weekly_goal":
@@ -926,10 +1049,10 @@ async def handle_input(message: Message):
             db.commit()
             db.close()
 
-            await message.answer("Мета тижня збережена.")
+            await message.answer(pick_lang(lang, "Мета тижня збережена.", "Weekly goal saved."))
             clear_user_state(uid)
         except:
-            await message.answer("Введи число.")
+            await message.answer(pick_lang(lang, "Введи число.", "Enter a number."))
         return
 
     # WEIGHT
@@ -950,10 +1073,10 @@ async def handle_input(message: Message):
             db.commit()
             db.close()
 
-            await message.answer("Вагу збережено.")
+            await message.answer(pick_lang(lang, "Вагу збережено.", "Weight saved."))
             clear_user_state(uid)
         except:
-            await message.answer("Введи число.")
+            await message.answer(pick_lang(lang, "Введи число.", "Enter a number."))
         return
 
     # PROFILE
@@ -962,9 +1085,9 @@ async def handle_input(message: Message):
             h, g, goal = map(str.strip, message.text.split(",", 2))
             h = int(h)
             g = g.lower()
-            if g == "ч":
+            if g in ("ч", "m", "male"):
                 g = "чоловік👨"
-            elif g == "ж":
+            elif g in ("ж", "f", "female"):
                 g = "жінка👩"
             db = get_db()
             cur = db.cursor()
@@ -982,10 +1105,10 @@ async def handle_input(message: Message):
             db.commit()
             db.close()
 
-            await message.answer("Профіль збережено.")
+            await message.answer(pick_lang(lang, "Профіль збережено.", "Profile saved."))
             clear_user_state(uid)
         except:
-            await message.answer("Формат: 165, ч, мета")
+            await message.answer(pick_lang(lang, "Формат: 165, ч, мета", "Format: 165, m, goal"))
 
     # WORKOUT
     if state == "workout":
@@ -1002,7 +1125,7 @@ async def handle_input(message: Message):
         db.commit()
         db.close()
 
-        await message.answer(f"Збережено: {len(exercises)}")
+        await message.answer(pick_lang(lang, f"Збережено: {len(exercises)}", f"Saved: {len(exercises)}"))
         clear_user_state(uid)
 
 
