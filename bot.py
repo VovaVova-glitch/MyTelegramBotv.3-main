@@ -115,6 +115,49 @@ def style_block(title: str, body: str, icon: str = "✨") -> str:
     )
 
 
+def build_start_text(lang: str) -> str:
+    menu_body = pick_lang(
+        lang,
+        "/profile — профіль\n"
+        "/edit_profile — змінити профіль\n"
+        "/workout — записати тренування\n"
+        "/today — сьогодні\n"
+        "/stats — статистика\n"
+        "/weight — вага\n"
+        "/reset — видалити все\n"
+        "/weight_stats — статистика ваги\n"
+        "/suggest — запропонувати тренування\n"
+        "/set_goal — встановити мету на тиждень\n"
+        "/set_language — змінити мову\n"
+        "/reminders — нагадування\n"
+        "/goal — показати мету на тиждень\n"
+        "/motivate — мотивація\n"
+        "/tip — корисна порада\n"
+        "/challenge — челендж дня",
+        "/profile — profile\n"
+        "/edit_profile — edit profile\n"
+        "/workout — log workout\n"
+        "/today — today\n"
+        "/stats — statistics\n"
+        "/weight — weight\n"
+        "/reset — delete all data\n"
+        "/weight_stats — weight statistics\n"
+        "/suggest — suggest workout\n"
+        "/set_goal — set weekly goal\n"
+        "/set_language — change language\n"
+        "/reminders — reminders\n"
+        "/goal — show weekly goal\n"
+        "/motivate — motivation\n"
+        "/tip — health tip\n"
+        "/challenge — challenge of the day"
+    )
+    return style_block(
+        "SportBot",
+        menu_body,
+        icon="🏁"
+    )
+
+
 def generate_workout(goal: str) -> str:
     if "наб" in goal:
         return (random.choice(
@@ -482,45 +525,12 @@ async def start(message: Message):
         await message.answer("Оберіть мову", reply_markup=language_kb)
         return
 
-    menu_body = pick_lang(
-        lang,
-        "/profile — профіль\n"
-        "/edit_profile — змінити профіль\n"
-        "/workout — записати тренування\n"
-        "/today — сьогодні\n"
-        "/stats — статистика\n"
-        "/weight — вага\n"
-        "/reset — видалити все\n"
-        "/weight_stats — статистика ваги\n"
-        "/suggest — запропонувати тренування\n"
-        "/set_goal — встановити мету на тиждень\n"
-        "/reminders — нагадування\n"
-        "/goal — показати мету на тиждень\n"
-        "/motivate — мотивація\n"
-        "/tip — корисна порада\n"
-        "/challenge — челендж дня",
-        "/profile — profile\n"
-        "/edit_profile — edit profile\n"
-        "/workout — log workout\n"
-        "/today — today\n"
-        "/stats — statistics\n"
-        "/weight — weight\n"
-        "/reset — delete all data\n"
-        "/weight_stats — weight statistics\n"
-        "/suggest — suggest workout\n"
-        "/set_goal — set weekly goal\n"
-        "/reminders — reminders\n"
-        "/goal — show weekly goal\n"
-        "/motivate — motivation\n"
-        "/tip — health tip\n"
-        "/challenge — challenge of the day"
-    )
-    text = style_block(
-        "SportBot",
-        menu_body,
-        icon="🏁"
-    )
-    await message.answer(text, parse_mode="HTML")
+    await message.answer(build_start_text(lang), parse_mode="HTML")
+
+
+@dp.message(Command("set_language"))
+async def set_language_command(message: Message):
+    await message.answer("Choose language / Оберіть мову", reply_markup=language_kb)
 
 
 @dp.callback_query(lambda c: c.data in ("set_lang_en", "set_lang_uk"))
@@ -528,8 +538,7 @@ async def set_language(callback: CallbackQuery):
     lang = "en" if callback.data == "set_lang_en" else "uk"
     set_user_language(callback.from_user.id, lang)
     await callback.answer("Saved" if lang == "en" else "Збережено")
-    await callback.message.edit_text("Language selected: English" if lang == "en" else "Мову обрано: Українська")
-    await start(callback.message)
+    await callback.message.edit_text(build_start_text(lang), parse_mode="HTML")
 
 
 @dp.message(Command("profile"))
@@ -1137,6 +1146,7 @@ async def main():
     scheduler.start()
     await bot.set_my_commands([
         BotCommand(command="start", description="Запуск"),
+        BotCommand(command="set_language", description="Змінити мову"),
         BotCommand(command="profile", description="Профіль"),
         BotCommand(command="edit_profile", description="Змінити профіль"),
         BotCommand(command="workout", description="Тренування"),
