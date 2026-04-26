@@ -305,9 +305,19 @@ def init_db():
                     text
                     TEXT,
                     date
-                    TEXT
+                    TEXT,
+                    is_challenge
+                    INTEGER
+                    DEFAULT
+                    0
                 )
                 """)
+
+    # Add is_challenge column if it doesn't exist
+    cur.execute("PRAGMA table_info(workouts)")
+    columns = [row[1] for row in cur.fetchall()]
+    if 'is_challenge' not in columns:
+        cur.execute("ALTER TABLE workouts ADD COLUMN is_challenge INTEGER DEFAULT 0")
 
     cur.execute("""
                 CREATE TABLE IF NOT EXISTS user_states
@@ -873,17 +883,29 @@ async def challenge_done(callback: CallbackQuery):
     uid = callback.from_user.id
     lang = get_user_language(uid)
     today = datetime.now().strftime("%Y-%m-%d")
-    challenge_text = callback.message.text
+    
+    # Extract challenge text from the message (it's between 🔥 markers)
+    message_text = callback.message.text
+    # Find the challenge text that starts with 🔥
+    lines = message_text.split("\n")
+    challenge_text = None
+    for line in lines:
+        if line.startswith("🔥"):
+            challenge_text = line[1:].strip()  # Remove 🔥 emoji
+            break
+    
+    if not challenge_text:
+        challenge_text = message_text
 
     db = get_db()
     cur = db.cursor()
     cur.execute(
-        "SELECT 1 FROM workouts WHERE user_id=? AND date=? AND text=?",
-        (uid, today, challenge_text)
+        "SELECT 1 FROM workouts WHERE user_id=? AND date=? AND is_challenge=1",
+        (uid, today)
     )
     if not cur.fetchone():
         cur.execute(
-            "INSERT INTO workouts (user_id, text, date) VALUES (?, ?, ?)",
+            "INSERT INTO workouts (user_id, text, date, is_challenge) VALUES (?, ?, ?, 1)",
             (uid, challenge_text, today)
         )
         db.commit()
@@ -948,7 +970,7 @@ async def today(message: Message):
 
     today_date = datetime.now().strftime("%Y-%m-%d")
     cur.execute(
-        "SELECT text FROM workouts WHERE user_id=? AND date=?",
+        "SELECT text, is_challenge FROM workouts WHERE user_id=? AND date=? ORDER BY id",
         (message.from_user.id, today_date)
     )
     rows = cur.fetchall()
@@ -958,8 +980,22 @@ async def today(message: Message):
         await message.answer(pick_lang(lang, "Сьогодні тренувань немає.", "No workouts today."))
         return
 
-    total_cal = sum(calc_calories(r[0]) for r in rows)
-    text = "\n".join(f"• {r[0]}" for r in rows)
+    # Separate challenges and regular workouts
+    workouts_text_list = []
+    total_cal = 0
+    
+    for text, is_challenge in rows:
+        cal = calc_calories(text)
+        total_cal += cal
+        
+        if is_challenge:
+            # Display challenge with trophy icon
+            workouts_text_list.append(f"🏆 {text}")
+        else:
+            # Display regular workout
+            workouts_text_list.append(f"• {text}")
+    
+    text = "\n".join(workouts_text_list)
 
     await message.answer(
         style_block(
