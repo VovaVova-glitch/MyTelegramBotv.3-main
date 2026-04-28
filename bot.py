@@ -209,19 +209,24 @@ async def check_missed_days():
 
     yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
+    # Вибираємо користувачів з включеними нагадуваннями, які мають тренування за останні 7 днів
     cur.execute("""
                 SELECT DISTINCT u.user_id
                 FROM users u
-                         JOIN workouts w ON u.user_id = w.user_id
-                WHERE w.date >= ?
-                  AND u.reminders_enabled = 1
+                WHERE u.reminders_enabled = 1
+                  AND u.user_id IN (
+                    SELECT DISTINCT user_id FROM workouts 
+                    WHERE date >= ?
+                  )
                 """, ((datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d"),))
 
     users = [row[0] for row in cur.fetchall()]
 
     for uid in users:
-        cur.execute("SELECT 1 FROM workouts WHERE user_id=? AND date=?", (uid, yesterday))
-        if not cur.fetchone():
+        # Використовуємо окремий курсор для уникнення конфліктів
+        check_cur = db.cursor()
+        check_cur.execute("SELECT 1 FROM workouts WHERE user_id=? AND date=?", (uid, yesterday))
+        if not check_cur.fetchone():
             lang = get_user_language(uid)
             messages = [
                 pick_lang(lang, "💪 Вчора пропустив тренування?\nСьогодні новий день! 🔥 /suggest", "💪 Missed a workout yesterday?\nToday is a new day! 🔥 /suggest"),
@@ -229,6 +234,7 @@ async def check_missed_days():
                 pick_lang(lang, "⚡ Швидкий тест: /suggest → ✅ Виконав!", "⚡ Quick test: /suggest → ✅ Done!")
             ]
             await bot.send_message(uid, random.choice(messages))
+        check_cur.close()
 
     db.close()
     print("✅Перевірка пропущених днів виконана.")
