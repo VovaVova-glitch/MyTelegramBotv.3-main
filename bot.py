@@ -675,20 +675,22 @@ async def reminders(message: Message):
     cur = db.cursor()
 
     cur.execute(
-        """
-        INSERT INTO users (user_id, reminders_enabled)
-        VALUES (?, 1)
-        ON CONFLICT(user_id) DO NOTHING
-        """,
-        (uid,)
-    )
-    cur.execute(
         "SELECT reminders_enabled FROM users WHERE user_id=?",
         (uid,)
     )
     row = cur.fetchone()
-    status = bool(row[0]) if row else True
-    db.commit()
+    
+    if not row:
+        # Новый пользователь - создаём запись с включенными напоминаниями
+        cur.execute(
+            "INSERT INTO users (user_id, reminders_enabled) VALUES (?, 1)",
+            (uid,)
+        )
+        db.commit()
+        status = True
+    else:
+        status = bool(row[0])
+    
     db.close()
 
     if status:
@@ -725,13 +727,17 @@ async def reminders_on(callback: CallbackQuery):
     db.commit()
     db.close()
 
-    await callback.message.edit_text(
-        pick_lang(
-            lang,
-            "🔔 Нагадування УВІМКНЕНІ!\n\nОтримувати мотивацію щодня при пропуску тренування? 💪",
-            "🔔 Reminders are ENABLED!\n\nGet daily motivation if you skip a workout? 💪"
+    try:
+        await callback.message.edit_text(
+            pick_lang(
+                lang,
+                "🔔 Нагадування УВІМКНЕНІ!\n\nОтримувати мотивацію щодня при пропуску тренування? 💪",
+                "🔔 Reminders are ENABLED!\n\nGet daily motivation if you skip a workout? 💪"
+            ),
+            reply_markup=None
         )
-    )
+    except:
+        pass
     await callback.answer(pick_lang(lang, "Увімкнено!", "Enabled!"))
 
 
@@ -757,13 +763,17 @@ async def reminders_off(callback: CallbackQuery):
     db.commit()
     db.close()
 
-    await callback.message.edit_text(
-        pick_lang(
-            lang,
-            "🔕 Нагадування ВИМКНЕНІ\n\nТи босс, тренуйся за настроєм! 😎",
-            "🔕 Reminders are DISABLED\n\nYou're the boss, train by your mood! 😎"
+    try:
+        await callback.message.edit_text(
+            pick_lang(
+                lang,
+                "🔕 Нагадування ВИМКНЕНІ\n\nТи босс, тренуйся за настроєм! 😎",
+                "🔕 Reminders are DISABLED\n\nYou're the boss, train by your mood! 😎"
+            ),
+            reply_markup=None
         )
-    )
+    except:
+        pass
     await callback.answer(pick_lang(lang, "Вимкнено!", "Disabled!"))
 
 
