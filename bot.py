@@ -69,6 +69,31 @@ def challenge_keyboard(lang: str) -> InlineKeyboardMarkup:
         InlineKeyboardButton(text=pick_lang(lang, "✅ Зробив", "✅ Done"), callback_data="challenge_done"),
         InlineKeyboardButton(text=pick_lang(lang, "🔁 Інший челендж", "🔁 Another challenge"), callback_data="challenge_next")
     ]])
+
+
+PROFILE_FIELDS = (
+    ("height", "Зріст", "Height"),
+    ("gender", "Стать", "Gender"),
+    ("age", "Вік", "Age"),
+    ("weight", "Вага", "Weight"),
+    ("goal", "Мета", "Goal"),
+)
+
+
+def profile_visibility_keyboard(lang: str, visibility: dict) -> InlineKeyboardMarkup:
+    rows = []
+    for field, uk_label, en_label in PROFILE_FIELDS:
+        enabled = bool(visibility.get(field, True))
+        icon = "✅" if enabled else "🚫"
+        rows.append([
+            InlineKeyboardButton(
+                text=f"{icon} {pick_lang(lang, uk_label, en_label)}",
+                callback_data=f"profile_toggle_{field}"
+            )
+        ])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 language_kb = InlineKeyboardMarkup(inline_keyboard=[
     [
         InlineKeyboardButton(text="English", callback_data="set_lang_en"),
@@ -120,6 +145,7 @@ def build_start_text(lang: str) -> str:
         lang,
         "/profile — профіль\n"
         "/edit_profile — змінити профіль\n"
+        "/profile_visibility — що показувати в профілі\n"
         "/workout — записати тренування\n"
         "/today — сьогодні\n"
         "/stats — статистика\n"
@@ -136,6 +162,7 @@ def build_start_text(lang: str) -> str:
         "/challenge — челендж дня",
         "/profile — profile\n"
         "/edit_profile — edit profile\n"
+        "/profile_visibility — profile fields visibility\n"
         "/workout — log workout\n"
         "/today — today\n"
         "/stats — statistics\n"
@@ -261,6 +288,8 @@ def init_db():
                     INTEGER,
                     gender
                     TEXT,
+                    age
+                    INTEGER,
                     goal
                     TEXT,
                     weekly_goal
@@ -280,6 +309,17 @@ def init_db():
         cur.execute("ALTER TABLE users ADD COLUMN reminders_enabled INTEGER DEFAULT 1")
     if 'language' not in columns:
         cur.execute("ALTER TABLE users ADD COLUMN language TEXT DEFAULT 'uk'")
+    if 'age' not in columns:
+        cur.execute("ALTER TABLE users ADD COLUMN age INTEGER")
+    for column_name in (
+        'show_height',
+        'show_gender',
+        'show_age',
+        'show_weight',
+        'show_goal'
+    ):
+        if column_name not in columns:
+            cur.execute(f"ALTER TABLE users ADD COLUMN {column_name} INTEGER DEFAULT 1")
 
     cur.execute("""
                 CREATE TABLE IF NOT EXISTS weights
@@ -395,6 +435,43 @@ def set_user_language(user_id: int, lang: str):
         ON CONFLICT(user_id) DO UPDATE SET language=excluded.language
         """,
         (user_id, lang)
+    )
+    db.commit()
+    db.close()
+
+
+def get_profile_visibility(user_id: int) -> dict:
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        """
+        SELECT show_height, show_gender, show_age, show_weight, show_goal
+        FROM users
+        WHERE user_id=?
+        """,
+        (user_id,)
+    )
+    row = cur.fetchone()
+    db.close()
+
+    if not row:
+        return {field: True for field, _, _ in PROFILE_FIELDS}
+
+    return {
+        "height": row[0] != 0,
+        "gender": row[1] != 0,
+        "age": row[2] != 0,
+        "weight": row[3] != 0,
+        "goal": row[4] != 0,
+    }
+
+
+def ensure_user(user_id: int):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "INSERT INTO users (user_id) VALUES (?) ON CONFLICT(user_id) DO NOTHING",
+        (user_id,)
     )
     db.commit()
     db.close()
@@ -565,7 +642,12 @@ async def profile(message: Message):
     cur = db.cursor()
 
     cur.execute(
-        "SELECT height, gender, goal, current_weight FROM users WHERE user_id=?",
+        """
+        SELECT height, gender, age, goal, current_weight,
+               show_height, show_gender, show_age, show_weight, show_goal
+        FROM users
+        WHERE user_id=?
+        """,
         (uid,)
     )
     profile_row = cur.fetchone()
@@ -576,23 +658,41 @@ async def profile(message: Message):
         await message.answer(
             pick_lang(
                 lang,
-                "Введи профіль:\nЗріст, стать, мета\nПриклад: 165, ч, набрати масу",
-                "Enter your profile:\nHeight, gender, goal\nExample: 165, m, gain muscle"
+                "Введи профіль:\nЗріст, стать, вік, мета\nПриклад: 165, ч, 25, набрати масу",
+                "Enter your profile:\nHeight, gender, age, goal\nExample: 165, m, 25, gain muscle"
             )
         )
         return
 
-    h, g, goal, current_weight = profile_row  # ← 4 змінні!
+    h, g, age, goal, current_weight, show_height, show_gender, show_age, show_weight, show_goal = profile_row
     weight_text = f"{current_weight:.1f} кг" if current_weight and current_weight > 0 else pick_lang(lang, "не вказана", "not set")
+    age_text = str(age) if age else pick_lang(lang, "не вказаний", "not set")
+
+    profile_lines = []
+    if show_height:
+        profile_lines.append(pick_lang(lang, f"📏 Зріст: {h} см", f"📏 Height: {h} cm"))
+    if show_gender:
+        profile_lines.append(pick_lang(lang, f"🧍 Стать: {g}", f"🧍 Gender: {g}"))
+    if show_age:
+        profile_lines.append(pick_lang(lang, f"🎂 Вік: {age_text}", f"🎂 Age: {age_text}"))
+    if show_weight:
+        profile_lines.append(pick_lang(lang, f"⚖️ Вага: {weight_text}", f"⚖️ Weight: {weight_text}"))
+    if show_goal:
+        profile_lines.append(pick_lang(lang, f"🎯 Мета: {goal}", f"🎯 Goal: {goal}"))
+
+    if not profile_lines:
+        profile_lines.append(
+            pick_lang(
+                lang,
+                "Усі поля приховані. Налаштувати: /profile_visibility",
+                "All fields are hidden. Configure: /profile_visibility"
+            )
+        )
 
     await message.answer(
         style_block(
             pick_lang(lang, "Профіль", "Profile"),
-            pick_lang(
-                lang,
-                f"📏 Зріст: {h} см\n🧍 Стать: {g}\n⚖️ Вага: {weight_text}\n🎯 Мета: {goal}",
-                f"📏 Height: {h} cm\n🧍 Gender: {g}\n⚖️ Weight: {weight_text}\n🎯 Goal: {goal}"
-            ),
+            "\n".join(profile_lines),
             icon="👤"
         ),
         parse_mode="HTML"
@@ -604,8 +704,60 @@ async def edit_profile(message: Message):
     lang = get_user_language(message.from_user.id)
     set_user_state(message.from_user.id, "profile")
     await message.answer(
-        pick_lang(lang, "Зріст, стать, мета\nПриклад: 170, ж, схуднути", "Height, gender, goal\nExample: 170, f, lose weight")
+        pick_lang(
+            lang,
+            "Зріст, стать, вік, мета\nПриклад: 170, ж, 25, схуднути\n\nСтарий формат теж працює: 170, ж, схуднути",
+            "Height, gender, age, goal\nExample: 170, f, 25, lose weight\n\nOld format also works: 170, f, lose weight"
+        )
     )
+
+
+@dp.message(Command("profile_visibility"))
+async def profile_visibility(message: Message):
+    uid = message.from_user.id
+    lang = get_user_language(uid)
+    ensure_user(uid)
+    visibility = get_profile_visibility(uid)
+    await message.answer(
+        pick_lang(
+            lang,
+            "Обери, які поля показувати в /profile:",
+            "Choose which fields to show in /profile:"
+        ),
+        reply_markup=profile_visibility_keyboard(lang, visibility)
+    )
+
+
+@dp.callback_query(F.data.startswith("profile_toggle_"))
+async def profile_toggle(callback: CallbackQuery):
+    uid = callback.from_user.id
+    lang = get_user_language(uid)
+    field = callback.data.replace("profile_toggle_", "", 1)
+
+    if field not in {name for name, _, _ in PROFILE_FIELDS}:
+        await callback.answer()
+        return
+
+    column = f"show_{field}"
+    ensure_user(uid)
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(f"SELECT {column} FROM users WHERE user_id=?", (uid,))
+    row = cur.fetchone()
+    new_value = 0 if row and row[0] else 1
+    cur.execute(f"UPDATE users SET {column}=? WHERE user_id=?", (new_value, uid))
+    db.commit()
+    db.close()
+
+    visibility = get_profile_visibility(uid)
+    try:
+        await callback.message.edit_reply_markup(
+            reply_markup=profile_visibility_keyboard(lang, visibility)
+        )
+    except Exception:
+        pass
+    await callback.answer(pick_lang(lang, "Оновлено", "Updated"))
 
 
 @dp.message(Command("set_goal"))
@@ -1123,6 +1275,10 @@ async def handle_input(message: Message):
             db = get_db()
             cur = db.cursor()
             cur.execute(
+                "INSERT INTO users (user_id) VALUES (?) ON CONFLICT(user_id) DO NOTHING",
+                (uid,)
+            )
+            cur.execute(
                 "INSERT INTO weights (user_id, weight, date) VALUES (?, ?, ?)",
                 (uid, w, datetime.now().strftime("%Y-%m-%d"))
             )
@@ -1143,9 +1299,25 @@ async def handle_input(message: Message):
     # PROFILE
     if state == "profile":
         try:
-            h, g, goal = map(str.strip, message.text.split(",", 2))
-            h = int(h)
-            g = g.lower()
+            parts = [part.strip() for part in message.text.split(",")]
+            if len(parts) < 3:
+                raise ValueError("not enough profile parts")
+
+            h = int(parts[0])
+            g = parts[1].lower()
+            age = None
+
+            if len(parts) >= 4:
+                age = int(parts[2])
+                goal = ",".join(parts[3:]).strip()
+            else:
+                goal = parts[2]
+
+            if age is not None and not 1 <= age <= 120:
+                raise ValueError("invalid age")
+            if not goal:
+                raise ValueError("empty goal")
+
             if g in ("ч", "m", "male"):
                 g = "чоловік👨"
             elif g in ("ж", "f", "female"):
@@ -1154,14 +1326,15 @@ async def handle_input(message: Message):
             cur = db.cursor()
             cur.execute(
                 """
-                INSERT INTO users (user_id, height, gender, goal)
-                VALUES (?, ?, ?, ?) ON CONFLICT(user_id) DO
+                INSERT INTO users (user_id, height, gender, age, goal)
+                VALUES (?, ?, ?, ?, ?) ON CONFLICT(user_id) DO
                 UPDATE SET
                     height=excluded.height,
                     gender=excluded.gender,
+                    age=COALESCE(excluded.age, users.age),
                     goal=excluded.goal
                 """,
-                (uid, h, g, goal)
+                (uid, h, g, age, goal)
             )
             db.commit()
             db.close()
@@ -1169,7 +1342,7 @@ async def handle_input(message: Message):
             await message.answer(pick_lang(lang, "Профіль збережено.", "Profile saved."))
             clear_user_state(uid)
         except:
-            await message.answer(pick_lang(lang, "Формат: 165, ч, мета", "Format: 165, m, goal"))
+            await message.answer(pick_lang(lang, "Формат: 165, ч, 25, мета", "Format: 165, m, 25, goal"))
 
     # WORKOUT
     if state == "workout":
@@ -1201,6 +1374,7 @@ async def main():
         BotCommand(command="set_language", description="Змінити мову"),
         BotCommand(command="profile", description="Профіль"),
         BotCommand(command="edit_profile", description="Змінити профіль"),
+        BotCommand(command="profile_visibility", description="Поля профілю"),
         BotCommand(command="workout", description="Тренування"),
         BotCommand(command="today", description="Сьогодні"),
         BotCommand(command="stats", description="Статистика"),
